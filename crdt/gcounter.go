@@ -3,7 +3,7 @@ package crdt
 import "sync"
 
 type GCounter struct {
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	id     string
 	counts map[string]int
 }
@@ -32,8 +32,8 @@ func (g *GCounter) Merge(other map[string]int) {
 }
 
 func (g *GCounter) Value() int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	total := 0
 	for _, v := range g.counts {
 		total += v
@@ -42,8 +42,8 @@ func (g *GCounter) Value() int {
 }
 
 func (g *GCounter) Snapshot() map[string]int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	cp := make(map[string]int)
 	for k, v := range g.counts {
 		cp[k] = v

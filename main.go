@@ -33,7 +33,10 @@ func (d *CRDTDelegate) GetBroadcasts(overhead, limit int) [][]byte {
 }
 func (d *CRDTDelegate) LocalState(join bool) []byte {
 	var buf bytes.Buffer
-	gob.NewEncoder(&buf).Encode(d.counter.Snapshot())
+	err := gob.NewEncoder(&buf).Encode(d.counter.Snapshot())
+	if err != nil {
+		return nil
+	}
 	return buf.Bytes()
 }
 func (d *CRDTDelegate) MergeRemoteState(buf []byte, join bool) {
@@ -64,7 +67,6 @@ func main() {
 
 	// Gossip port inside container and Docker network
 	const basePort = 7946
-	bindPort := basePort // all containers bind to same port inside Docker network
 
 	// Prepare peers list excluding self
 	peerService := os.Getenv("PEER_SERVICE")
@@ -90,7 +92,7 @@ func main() {
 
 	cfg := memberlist.DefaultLocalConfig()
 	cfg.Name = hostname
-	cfg.BindPort = bindPort
+	cfg.BindPort = basePort
 	cfg.BindAddr = "0.0.0.0"
 	cfg.Delegate = delegate
 
@@ -115,7 +117,10 @@ func main() {
 			counter.Increment()
 
 			var buf bytes.Buffer
-			gob.NewEncoder(&buf).Encode(counter.Snapshot())
+			err := gob.NewEncoder(&buf).Encode(counter.Snapshot())
+			if err != nil {
+				return
+			}
 			msg := &crdt.Broadcast{Msg: buf.Bytes()}
 			delegate.broadcasts.QueueBroadcast(msg)
 
