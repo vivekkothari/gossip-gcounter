@@ -3,8 +3,9 @@ services:
     build: .
     networks:
       - gcounter-net
-    expose:
-      - "7946"
+    ports:
+      - ":7946"
+      - ":9002"
     environment:
       - TOTAL_NODES=3 # Optional default, overridden at runtime
       - PEER_SERVICE=node
@@ -13,6 +14,18 @@ services:
       replicas: 3  # Set replicas here instead of using --scale
     restart: unless-stopped
 
+  # Add nginx as reverse proxy
+  nginx:
+    image: docker.io/bitnami/nginx:1.28.0
+    container_name: "nginx"
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx:/opt/bitnami/nginx/conf/server_blocks
+    depends_on:
+      - node
+    networks:
+      - gcounter-net
+
 networks:
   gcounter-net:
-    driver: bridge

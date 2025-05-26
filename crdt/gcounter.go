@@ -50,3 +50,9 @@ func (g *GCounter) Snapshot() map[string]int {
 	}
 	return cp
 }
+
+func (g *GCounter) Delta() map[string]int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return map[string]int{g.id: g.counts[g.id]}
+}

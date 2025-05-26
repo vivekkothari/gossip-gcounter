@@ -3,50 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"github.com/hashicorp/memberlist"
 	"gossip-gcounter/crdt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
 )
-
-// CRDTDelegate implements memberlist.Delegate interface
-type CRDTDelegate struct {
-	counter    *crdt.GCounter
-	broadcasts *memberlist.TransmitLimitedQueue
-}
-
-func (d *CRDTDelegate) NodeMeta(limit int) []byte { return nil }
-func (d *CRDTDelegate) NotifyMsg(b []byte) {
-	var incoming map[string]int
-	buf := bytes.NewBuffer(b)
-	if err := gob.NewDecoder(buf).Decode(&incoming); err != nil {
-		log.Println("decode error:", err)
-		return
-	}
-	d.counter.Merge(incoming)
-}
-func (d *CRDTDelegate) GetBroadcasts(overhead, limit int) [][]byte {
-	return d.broadcasts.GetBroadcasts(overhead, limit)
-}
-func (d *CRDTDelegate) LocalState(join bool) []byte {
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(d.counter.Snapshot())
-	if err != nil {
-		return nil
-	}
-	return buf.Bytes()
-}
-func (d *CRDTDelegate) MergeRemoteState(buf []byte, join bool) {
-	var incoming map[string]int
-	if err := gob.NewDecoder(bytes.NewReader(buf)).Decode(&incoming); err != nil {
-		log.Println("merge decode error:", err)
-		return
-	}
-	d.counter.Merge(incoming)
-}
 
 func main() {
 	// Get container hostname as nodeID
@@ -110,16 +76,56 @@ func main() {
 		}
 	}
 
+	// Start REST API
+	http.HandleFunc("/increment", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		counter.Increment()
+
+		// Optionally broadcast the delta
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(counter.Delta()); err == nil {
+			msg := &crdt.Broadcast{Msg: buf.Bytes()}
+			delegate.broadcasts.QueueBroadcast(msg)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Incremented")
+	})
+
+	http.HandleFunc("/counters", func(w http.ResponseWriter, r *http.Request) {
+		state := counter.Snapshot()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(state)
+	})
+
+	http.HandleFunc("/value", func(w http.ResponseWriter, r *http.Request) {
+		value := counter.Value()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int{"value": value})
+	})
+
+	// Run HTTP server on port 9002
+	go func() {
+		log.Println("Starting REST API on :9002")
+		if err := http.ListenAndServe(":9002", nil); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
 	// Periodic increment + broadcast
 	go func() {
 		for {
 			time.Sleep(3 * time.Second)
-			counter.Increment()
+			//counter.Increment()
 
 			var buf bytes.Buffer
-			err := gob.NewEncoder(&buf).Encode(counter.Snapshot())
+			err := gob.NewEncoder(&buf).Encode(counter.Delta())
 			if err != nil {
-				return
+				log.Println("delta encode error:", err)
+				continue
 			}
 			msg := &crdt.Broadcast{Msg: buf.Bytes()}
 			delegate.broadcasts.QueueBroadcast(msg)
