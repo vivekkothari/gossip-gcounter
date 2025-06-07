@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+var doc = &crdt.CRDTText{}
+
 func main() {
 	// Get container hostname as nodeID
 	hostname, err := os.Hostname()
@@ -51,7 +53,12 @@ func main() {
 	gob.Register(map[string]int{})
 	counter := crdt.NewGCounter(hostname)
 	delegate := &CRDTDelegate{counter: counter}
+	editorDelegate := &CRDTEditorDelegate{editor: doc}
 	delegate.broadcasts = &memberlist.TransmitLimitedQueue{
+		NumNodes:       func() int { return numReplicas },
+		RetransmitMult: 3,
+	}
+	editorDelegate.broadcasts = &memberlist.TransmitLimitedQueue{
 		NumNodes:       func() int { return numReplicas },
 		RetransmitMult: 3,
 	}
@@ -60,7 +67,7 @@ func main() {
 	cfg.Name = hostname
 	cfg.BindPort = basePort
 	cfg.BindAddr = "0.0.0.0"
-	cfg.Delegate = delegate
+	cfg.Delegate = editorDelegate
 
 	list, err := memberlist.Create(cfg)
 	if err != nil {
@@ -107,6 +114,10 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]int{"value": value})
 	})
 
+	http.HandleFunc("/insert", insertHandler)
+	http.HandleFunc("/delete", deleteHandler)
+	http.HandleFunc("/text", getTextHandler)
+
 	// Run HTTP server on port 9002
 	go func() {
 		log.Println("Starting REST API on :9002")
@@ -135,4 +146,45 @@ func main() {
 	}()
 
 	select {}
+}
+
+func insertHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AfterID string `json:"after_id"`
+		NewID   string `json:"new_id"`
+		Value   string `json:"value"` // single character
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Value) != 1 {
+		http.Error(w, "value must be a single character", http.StatusBadRequest)
+		return
+	}
+
+	doc.Insert(req.AfterID, req.NewID, rune(req.Value[0]))
+	w.WriteHeader(http.StatusOK)
+}
+
+func deleteHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	doc.Delete(req.ID)
+	w.WriteHeader(http.StatusOK)
+}
+
+func getTextHandler(w http.ResponseWriter, r *http.Request) {
+	text := doc.GetVisibleText()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"text": text})
 }
